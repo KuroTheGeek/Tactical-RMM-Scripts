@@ -11,9 +11,6 @@
     0 = Bereinigung erfolgreich
     1 = Teilweise Fehler (gesperrte Dateien, normales Verhalten)
 
-.NOTES
-    Version: 2.0 (Inkl. WER, Minidumps, CBS Logs & DO Cache)
-    Kontext: Tactical RMM Task (Ausführen als LocalSystem)
 #>
 
 $DaysOld = 7

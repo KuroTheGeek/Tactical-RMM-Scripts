@@ -12,8 +12,6 @@
     1 = Sicherheitsrisiko (Unerlaubte Admins gefunden)
     2 = Technischer Fehler
 
-.NOTES
-    Version: 1.0 (Neutral Edition)
 #>
 
 # --- KONFIGURATION: DEINE WHITELIST ---

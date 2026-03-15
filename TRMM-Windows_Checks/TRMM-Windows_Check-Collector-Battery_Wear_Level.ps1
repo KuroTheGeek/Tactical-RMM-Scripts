@@ -14,9 +14,6 @@
     1 = Akku-Gesundheit unter Schwellenwert
     2 = Technischer Fehler beim Auslesen
 
-.NOTES
-    Autor: Remo Senften / KuroTec
-    Version: 1.0
 #>
 
 # Schwellenwert in Prozent (Warne, wenn Akku-Gesundheit unter X%)

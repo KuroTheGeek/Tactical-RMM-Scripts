@@ -12,9 +12,6 @@
     1 = Neustart ausstehend (Alarm)
     2 = Technischer Fehler beim Auslesen der Registry
 
-.NOTES
-    Autor: Dein Name
-    Version: 1.0
 #>
 
 $rebootPending = $false

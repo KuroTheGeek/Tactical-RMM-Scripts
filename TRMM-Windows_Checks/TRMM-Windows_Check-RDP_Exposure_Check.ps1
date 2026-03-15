@@ -13,9 +13,6 @@
     1 = Sicherheitsrisiko (NLA fehlt oder RDP unerwünscht aktiv)
     2 = Fehler beim Auslesen der Registry
 
-.NOTES
-    Autor: Dein Name
-    Version: 1.0
 #>
 
 # --- KONFIGURATION ---

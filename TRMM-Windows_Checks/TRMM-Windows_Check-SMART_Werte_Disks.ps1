@@ -15,9 +15,6 @@
     1 = Mindestens ein Laufwerk meldet Fehler oder niedrige Lebensdauer
     2 = Technischer Fehler beim Auslesen der Speicherdaten
 
-.NOTES
-    Autor: Remo Senften / Kurotec
-    Version: 1.0
 #>
 
 $lifeThreshold = 10
