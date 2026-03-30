@@ -1,57 +1,94 @@
 <#
 .SYNOPSIS
-  Saubere Deinstallation ueber den internen Windows Package Manager.
-  Liest die App direkt aus der Windows-Datenbank aus (wie "Apps & Features").
-  Als User ausführen.
+  Kombiniertes Pruef- und Deinstallations-Script fuer Tactical RMM.
+  Ausfuehrung ZWINGEND als "Logged On User"!
+  Sicher gegen False Positives (z. B. Devolutions). Keine Umlaute.
 #>
 
-Write-Host "=== Deinstallation ueber Windows Package Manager ==="
+$actionTaken = $false
+Write-Host "=== Sicherer Check & Uninstall: Microsoft Remote Desktop ==="
 
-# Sucht nach beiden Namensvarianten
-$package = Get-Package -Name "*Remotedesktop*" -ErrorAction SilentlyContinue
+# 1. Pruefung und Deinstallation ueber Package Manager
+Write-Host "[INFO] Pruefe Windows Package Manager auf exakte Uebereinstimmungen..."
 
-if (-not $package) {
-    $package = Get-Package -Name "*Remote Desktop*" -ErrorAction SilentlyContinue
+# Wir suchen OHNE Wildcards nur nach den exakten Namen
+$packages = Get-Package -ErrorAction SilentlyContinue | Where-Object { 
+    $_.Name -eq "Remotedesktop" -or $_.Name -eq "Remote Desktop" 
 }
 
-if ($package) {
-    Write-Host "[FUND] Paket in der Windows-Datenbank gefunden!"
-    Write-Host "Name: $($package.Name)"
-    Write-Host "Version: $($package.Version)"
-    Write-Host "Provider: $($package.ProviderName)"
-    
-    Write-Host "Starte offizielle Deinstallation..."
-    try {
-        # Führt die Deinstallation unsichtbar aus
-        $package | Uninstall-Package -AllVersions -Force -ErrorAction Stop
-        
-        Write-Host "[ERFOLG] Deinstallations-Befehl erfolgreich an Windows uebergeben."
-        
-        # Startmenue aufraeumen (Sicherheitshalber)
-        $startMenu = Join-Path -Path $env:APPDATA -ChildPath "Microsoft\Windows\Start Menu\Programs"
-        Get-ChildItem -Path $startMenu -Filter "*Remote*Desktop*.lnk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-        Get-ChildItem -Path $startMenu -Filter "*Remotedesktop*.lnk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-        
-        exit 1 # Erfolg für Tactical RMM
-    } catch {
-        Write-Host "[FEHLER] Windows konnte das Paket nicht deinstallieren."
-        Write-Host "Fehlermeldung: $($_.Exception.Message)"
-        exit 0
+if ($packages) {
+    foreach ($pkg in $packages) {
+        Write-Host "[FUND] Zu deinstallierendes Paket gefunden: $($pkg.Name) (Version: $($pkg.Version))"
+        try {
+            # Deinstalliert nur das exakt gefundene Paket
+            $pkg | Uninstall-Package -AllVersions -Force -ErrorAction Stop
+            Write-Host "[ERFOLG] Paket erfolgreich deinstalliert."
+            $actionTaken = $true
+        } catch {
+            Write-Host "[FEHLER] Deinstallation via Package Manager fehlgeschlagen: $($_.Exception.Message)"
+        }
     }
 } else {
-    Write-Host "[INFO] Windows Package Manager konnte kein Paket mit diesem Namen finden."
-    
-    # Letzter WMI-Fallback (durchsucht die tiefe MSI-Datenbank)
-    Write-Host "Pruefe tiefe WMI-Datenbank als Fallback..."
-    $wmiApp = Get-WmiObject -Class Win32_Product -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "Remote\s?desktop" }
-    
-    if ($wmiApp) {
-        Write-Host "[FUND] App in WMI gefunden: $($wmiApp.Name)"
-        $wmiApp.Uninstall() | Out-Null
-        Write-Host "[ERFOLG] WMI Deinstallation ausgefuehrt."
-        exit 1
-    } else {
-        Write-Host "[INFO] Keine Installation gefunden. System ist sauber."
-        exit 0
+    Write-Host "[OK] Keine exakten Treffer im Package Manager."
+}
+
+# 2. Direkte Dateipruefung und Fallback-Deinstallation (AppData)
+Write-Host "`n[INFO] Pruefe lokale AppData-Verzeichnisse auf verwaiste Installationen..."
+$appData = $env:LOCALAPPDATA
+$rdPathsToCheck = @(
+    "$appData\Apps\Remote Desktop",
+    "$appData\Programs\Remote Desktop"
+)
+
+foreach ($path in $rdPathsToCheck) {
+    # Prueft exakt auf den Ordner und die spezifischen Exe-Dateien
+    if ((Test-Path -Path "$path\msrdcw.exe") -or (Test-Path -Path "$path\msrdc.exe")) {
+        Write-Host "[FUND] Installationsordner mit MSRDC-Exe gefunden: $path"
+        $actionTaken = $true
+        
+        # Versuche eigenen Uninstaller im Ordner zu finden
+        $uninstaller = Get-ChildItem -Path $path -Filter "unins*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $uninstaller) {
+            $uninstaller = Get-ChildItem -Path $path -Filter "uninstall.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+
+        if ($uninstaller) {
+            Write-Host "Starte lokalen Uninstaller..."
+            $process = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait -PassThru -NoNewWindow
+            if ($process.ExitCode -eq 0) {
+                Write-Host "[ERFOLG] Lokaler Uninstaller erfolgreich durchgelaufen."
+            } else {
+                Write-Host "[WARNUNG] Lokaler Uninstaller meldet Exit-Code $($process.ExitCode)."
+            }
+        } else {
+            Write-Host "[WARNUNG] Kein Uninstaller gefunden. Loesche den Ordner hart."
+            Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
+}
+
+# 3. Startmenue aufraeumen (Sucht gezielt nur nach den exakten Microsoft-Verknuepfungen)
+if ($actionTaken) {
+    Write-Host "`n[INFO] Raeume Startmenue auf..."
+    $startMenu = Join-Path -Path $env:APPDATA -ChildPath "Microsoft\Windows\Start Menu\Programs"
+    $links = Get-ChildItem -Path $startMenu -Filter "*.lnk" -Recurse -ErrorAction SilentlyContinue
+    
+    foreach ($link in $links) {
+        # Loescht die Verknuepfung nur, wenn der Name zu 100% passt
+        if ($link.Name -eq "Remote Desktop.lnk" -or $link.Name -eq "Remotedesktop.lnk") {
+            Remove-Item -Path $link.FullName -Force -ErrorAction SilentlyContinue
+            Write-Host "  - Verknuepfung geloescht: $($link.Name)"
+        }
+    }
+}
+
+Write-Host "------------------------------------------------------"
+
+# 4. Fazit & Exit Code fuer Tactical RMM
+if ($actionTaken) {
+    Write-Host "ERGEBNIS: Veraltete Clients wurden gefunden und entfernt! (Exit 1)"
+    exit 1
+} else {
+    Write-Host "ERGEBNIS: System ist sauber. Keine Aktion notwendig. (Exit 0)"
+    exit 0
 }
