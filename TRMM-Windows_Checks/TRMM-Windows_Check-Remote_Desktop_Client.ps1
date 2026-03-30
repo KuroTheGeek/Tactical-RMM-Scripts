@@ -1,62 +1,66 @@
 <#
 .SYNOPSIS
-  Prüft auf veraltete Microsoft Remote Desktop Clients (Store App & MSRDC).
-.DESCRIPTION
-  Gibt Exit Code 1 zurück, wenn veraltete Clients gefunden wurden (für RMM-Alerts).
-  Gibt Exit Code 0 zurück, wenn das System sauber ist.
+  Reine Pruefung auf alte RD Clients (MSRDC / MSRDCW) als "Logged On User".
+  Gibt Exit Code 1 zurueck, wenn die App gefunden wurde (fuer RMM-Alerts).
+  Gibt Exit Code 0 zurueck, wenn das System sauber ist.
 #>
 
-$foundDeprecatedClients = $false
+$found = $false
+Write-Host "=== Pruefung auf veraltete Remote Desktop Clients ==="
 
-Write-Host "Starte Überprüfung auf veraltete Microsoft Remote Desktop Clients..."
-Write-Host "------------------------------------------------------------------"
+# 1. Pruefung ueber den Windows Package Manager (identisch zum Apps & Features Menue)
+Write-Host "[INFO] Pruefe Windows Package Manager..."
+$package = Get-Package -Name "*Remotedesktop*" -ErrorAction SilentlyContinue
 
-# 1. Prüfung: Microsoft Store App (UWP)
-try {
-    # Benötigt Administrator/System-Rechte, um alle User zu prüfen
-    $uwpApps = Get-AppxPackage -AllUsers -Name "Microsoft.RemoteDesktop" -ErrorAction SilentlyContinue
-    if ($uwpApps) {
-        Write-Host "[WARNUNG] Veraltete Microsoft Store-App gefunden:"
-        $uwpApps | ForEach-Object { Write-Host "  - $($_.PackageFullName)" }
-        $foundDeprecatedClients = $true
-    }
-} catch {
-    Write-Host "[INFO] Appx-Pakete konnten nicht abgefragt werden."
+if (-not $package) {
+    $package = Get-Package -Name "*Remote Desktop*" -ErrorAction SilentlyContinue
 }
 
-# 2. Prüfung: Systemweiter MSI-Client (MSRDC)
-$systemMsrdcPath = "${env:ProgramFiles}\Remote Desktop\msrdc.exe"
-if (Test-Path $systemMsrdcPath) {
-    $version = (Get-Item $systemMsrdcPath).VersionInfo.ProductVersion
-    Write-Host "[WARNUNG] Systemweiter MSRDC-Client gefunden:"
-    Write-Host "  - Pfad: $systemMsrdcPath (Version: $version)"
-    $foundDeprecatedClients = $true
-}
-
-# 3. Prüfung: Benutzerbasierte MSRDC-Installationen (AppData)
-# Oft installieren Nutzer den Client selbst ohne Admin-Rechte
-$userPaths = Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue
-$userInstallsFound = $false
-
-foreach ($user in $userPaths) {
-    $msrdcPath = Join-Path -Path $user.FullName -ChildPath "AppData\Local\Programs\Remote Desktop\msrdc.exe"
-    if (Test-Path $msrdcPath) {
-        if (-not $userInstallsFound) {
-            Write-Host "[WARNUNG] Benutzerbasierte MSRDC-Installationen gefunden:"
-            $userInstallsFound = $true
-        }
-        $version = (Get-Item $msrdcPath).VersionInfo.ProductVersion
-        Write-Host "  - Benutzer: $($user.Name) (Version: $version)"
-        $foundDeprecatedClients = $true
-    }
-}
-
-Write-Host "------------------------------------------------------------------"
-
-if ($foundDeprecatedClients) {
-    Write-Host "ERGEBNIS: Veraltete Clients entdeckt. Bitte zur 'Windows App' migrieren."
-    exit 1
+if ($package) {
+    Write-Host "[FUND] Paket in der Windows-Datenbank gefunden!"
+    Write-Host "  - Name: $($package.Name)"
+    Write-Host "  - Version: $($package.Version)"
+    $found = $true
 } else {
-    Write-Host "ERGEBNIS: Keine veralteten Remote Desktop Clients gefunden."
-    exit 0
+    Write-Host "[OK] Kein Paket im Windows Package Manager gefunden."
+}
+
+# 2. Direkte Pruefung im Dateisystem (AppData des Users)
+Write-Host "`n[INFO] Pruefe lokale AppData-Verzeichnisse..."
+$appData = $env:LOCALAPPDATA
+$rdPathsToCheck = @(
+    "$appData\Apps\Remote Desktop",
+    "$appData\Programs\Remote Desktop"
+)
+
+foreach ($path in $rdPathsToCheck) {
+    if ((Test-Path -Path "$path\msrdcw.exe") -or (Test-Path -Path "$path\msrdc.exe")) {
+        Write-Host "[FUND] Installationsordner mit ausfuehrbarer Datei gefunden:"
+        Write-Host "  - Pfad: $path"
+        $found = $true
+    }
+}
+
+# 3. WMI-Fallback (Nur zur Sicherheit, falls das Package-Management klemmt)
+if (-not $found) {
+    Write-Host "`n[INFO] Pruefe WMI-Datenbank als Fallback..."
+    $wmiApp = Get-WmiObject -Class Win32_Product -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "Remote\s?desktop" }
+    
+    if ($wmiApp) {
+        Write-Host "[FUND] App in WMI gefunden: $($wmiApp.Name)"
+        $found = $true
+    } else {
+        Write-Host "[OK] Keine Installation in WMI gefunden."
+    }
+}
+
+Write-Host "------------------------------------------------------"
+
+# 4. Fazit & Exit Code fuer Tactical RMM
+if ($found) {
+    Write-Host "ERGEBNIS: Veralteter Client entdeckt! (Exit 1)"
+    exit 1  # Loest in Tactical RMM einen Alert aus
+} else {
+    Write-Host "ERGEBNIS: System ist sauber. (Exit 0)"
+    exit 0  # Alles in Ordnung, kein Alert
 }

@@ -1,65 +1,57 @@
 <#
 .SYNOPSIS
-  Prüft auf alte RD Clients, deinstalliert diese bei Fund und gibt einen Bericht aus.
+  Saubere Deinstallation ueber den internen Windows Package Manager.
+  Liest die App direkt aus der Windows-Datenbank aus (wie "Apps & Features").
+  Als User ausführen.
 #>
 
-$foundItems = @()
-$actionsTaken = @()
+Write-Host "=== Deinstallation ueber Windows Package Manager ==="
 
-Write-Host "=== Prüfung auf veraltete Remote Desktop Clients ==="
+# Sucht nach beiden Namensvarianten
+$package = Get-Package -Name "*Remotedesktop*" -ErrorAction SilentlyContinue
 
-# 1. UWP App prüfen
-$uwpApps = Get-AppxPackage -AllUsers "*Microsoft.RemoteDesktop*" -ErrorAction SilentlyContinue
-if ($uwpApps) {
-    $foundItems += "UWP Store-App (Microsoft.RemoteDesktop)"
-    $uwpApps | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-    Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object DisplayName -match "Microsoft.RemoteDesktop" | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
-    $actionsTaken += "UWP Store-App wurde deinstalliert."
+if (-not $package) {
+    $package = Get-Package -Name "*Remote Desktop*" -ErrorAction SilentlyContinue
 }
 
-# 2. Systemweite Installation prüfen
-$regPaths = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*")
-$systemApps = Get-ItemProperty $regPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "Remote Desktop" -and $_.InstallLocation -match "Remote Desktop" }
-
-if ($systemApps) {
-    $foundItems += "Systemweiter MSRDC-Client"
-    foreach ($app in $systemApps) {
-        if ($app.UninstallString -match "msiexec") {
-            Start-Process msiexec.exe -ArgumentList "/x $($app.PSChildName) /qn /norestart" -Wait -NoNewWindow
-        }
+if ($package) {
+    Write-Host "[FUND] Paket in der Windows-Datenbank gefunden!"
+    Write-Host "Name: $($package.Name)"
+    Write-Host "Version: $($package.Version)"
+    Write-Host "Provider: $($package.ProviderName)"
+    
+    Write-Host "Starte offizielle Deinstallation..."
+    try {
+        # Führt die Deinstallation unsichtbar aus
+        $package | Uninstall-Package -AllVersions -Force -ErrorAction Stop
+        
+        Write-Host "[ERFOLG] Deinstallations-Befehl erfolgreich an Windows uebergeben."
+        
+        # Startmenue aufraeumen (Sicherheitshalber)
+        $startMenu = Join-Path -Path $env:APPDATA -ChildPath "Microsoft\Windows\Start Menu\Programs"
+        Get-ChildItem -Path $startMenu -Filter "*Remote*Desktop*.lnk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $startMenu -Filter "*Remotedesktop*.lnk" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        
+        exit 1 # Erfolg für Tactical RMM
+    } catch {
+        Write-Host "[FEHLER] Windows konnte das Paket nicht deinstallieren."
+        Write-Host "Fehlermeldung: $($_.Exception.Message)"
+        exit 0
     }
-    $actionsTaken += "Systemweiter MSRDC-Client wurde deinstalliert."
-}
-
-# 3. Benutzerbasierte Installation prüfen
-$userPaths = Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue
-$userInstalls = 0
-
-foreach ($user in $userPaths) {
-    $rdPath = Join-Path -Path $user.FullName -ChildPath "AppData\Local\Programs\Remote Desktop"
-    if (Test-Path $rdPath) {
-        $userInstalls++
-        $uninstaller = Join-Path -Path $rdPath -ChildPath "unins000.exe"
-        if (Test-Path $uninstaller) {
-            Start-Process $uninstaller -ArgumentList "/SILENT" -Wait -NoNewWindow
-        }
-        if (Test-Path $rdPath) { Remove-Item -Path $rdPath -Recurse -Force -ErrorAction SilentlyContinue }
-    }
-}
-
-if ($userInstalls -gt 0) {
-    $foundItems += "Benutzerbasierte MSRDC-Installation ($userInstalls Profil(e))"
-    $actionsTaken += "Benutzerbasierte MSRDC-Installationen wurden gelöscht."
-}
-
-Write-Host "------------------------------------------------"
-if ($foundItems.Count -gt 0) {
-    Write-Host "[MELDUNG] Folgende veraltete Clients wurden gefunden und entfernt:"
-    $foundItems | ForEach-Object { Write-Host " - $_" }
-    Write-Host "`nStatus der Aktionen:"
-    $actionsTaken | ForEach-Object { Write-Host " + $_" }
-    exit 1 # Exit 1, damit Tactical RMM anzeigt, dass hier eingegriffen wurde
 } else {
-    Write-Host "[MELDUNG] Das System ist sauber. Keine alten RD-Clients gefunden."
-    exit 0 # Exit 0 = alles okay, kein Eingriff nötig
+    Write-Host "[INFO] Windows Package Manager konnte kein Paket mit diesem Namen finden."
+    
+    # Letzter WMI-Fallback (durchsucht die tiefe MSI-Datenbank)
+    Write-Host "Pruefe tiefe WMI-Datenbank als Fallback..."
+    $wmiApp = Get-WmiObject -Class Win32_Product -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "Remote\s?desktop" }
+    
+    if ($wmiApp) {
+        Write-Host "[FUND] App in WMI gefunden: $($wmiApp.Name)"
+        $wmiApp.Uninstall() | Out-Null
+        Write-Host "[ERFOLG] WMI Deinstallation ausgefuehrt."
+        exit 1
+    } else {
+        Write-Host "[INFO] Keine Installation gefunden. System ist sauber."
+        exit 0
+    }
 }
